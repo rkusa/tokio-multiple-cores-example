@@ -1,32 +1,20 @@
 extern crate futures;
-extern crate futures_cpupool;
 extern crate hyper;
 extern crate tokio_core;
+extern crate tokio_multiple_cores;
 
-use hyper::server::Service;
-use futures::{future, Future, Stream};
+use std::thread;
+
+use futures::Stream;
 use hyper::server::Http;
 use tokio_core::net::TcpListener;
-use tokio_core::reactor::Core;
-use std::sync::mpsc;
-use std::thread;
-use tokio_core::reactor::Remote;
-use hyper::{Request, Response};
+use tokio_core::reactor::{Core, Remote};
+use tokio_multiple_cores::App;
 
-struct App;
-
-impl Service for App {
-    type Request = Request;
-    type Response = Response;
-    type Error = hyper::Error;
-    type Future = Box<Future<Item = Self::Response, Error = Self::Error>>;
-
-    fn call(&self, _: Self::Request) -> Self::Future {
-        Box::new(future::ok(Response::default().with_body("Works!")))
-    }
-}
 
 fn main() {
+    use std::sync::mpsc;
+
     let mut threads = Vec::new();
 
     let worker_count = 3;
@@ -58,22 +46,12 @@ fn main() {
     let http = Http::new();
     let mut next_ix = 0;
     let srv = listener.incoming().for_each(move |(socket, addr)| {
-        let ix = next_ix % remotes.len();
-        next_ix += 1;
-        if next_ix == remotes.len() {
-            next_ix = 0;
-        }
-
-        let remote = remotes.get(ix).unwrap();
+        let remote = remotes.get(next_ix).unwrap();
+        next_ix = (next_ix + 1) % remotes.len();
         let http = http.clone();
 
         remote.spawn(move |handle| {
-            http.bind_connection(
-                handle,
-                socket,
-                addr,
-                App{},
-            );
+            http.bind_connection(handle, socket, addr, App::new(&handle));
             Ok(())
         });
         Ok(())
@@ -85,4 +63,3 @@ fn main() {
         thread.join().expect("Worker thread paniced");
     }
 }
-
